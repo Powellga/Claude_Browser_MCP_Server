@@ -50,7 +50,7 @@ BROWSER_TYPE = os.getenv("BROWSER_TYPE", "chromium")
 # ─── Lifespan: Manage Browser Instance ─────────────────────────────────────
 
 @asynccontextmanager
-async def browser_lifespan():
+async def browser_lifespan(server):
     """Launch and manage a persistent Playwright browser instance."""
     from playwright.async_api import async_playwright
 
@@ -84,12 +84,12 @@ mcp = FastMCP("browser_mcp", lifespan=browser_lifespan)
 
 def _get_page(ctx: Context):
     """Get the active Playwright page from lifespan state."""
-    return ctx.request_context.lifespan_state["page"]
+    return ctx.request_context.lifespan_context["page"]
 
 
 def _get_context(ctx: Context):
     """Get the browser context from lifespan state."""
-    return ctx.request_context.lifespan_state["context"]
+    return ctx.request_context.lifespan_context["context"]
 
 
 async def _resolve_locator(page, selector: str, index: int = 0):
@@ -835,7 +835,7 @@ async def browser_tabs(params: TabInput, ctx: Context) -> str:
         str: JSON with tab operation results
     """
     browser_ctx = _get_context(ctx)
-    state = ctx.request_context.lifespan_state
+    state = ctx.request_context.lifespan_context
 
     try:
         pages = browser_ctx.pages

@@ -1,4 +1,4 @@
-# 🌐 Browser MCP Server
+# Browser MCP Server
 
 **Give Claude Code a browser.** This MCP server bridges Claude Code (or any MCP client) with a real browser via Playwright, enabling AI agents to navigate websites, interact with pages, fill forms, take screenshots, and more — all from the command line.
 
@@ -35,15 +35,36 @@ The practical upshot: instead of every AI tool building its own proprietary plug
 
 ### 1. Install
 
+**Linux / macOS:**
 ```bash
-cd browser-mcp
+cd Claude_Browser_MCP_Server
 chmod +x install.sh
 ./install.sh
+```
+
+**Windows:**
+```powershell
+cd Claude_Browser_MCP_Server
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\playwright install chromium
 ```
 
 This creates a virtual environment, installs dependencies, and downloads Chromium.
 
 ### 2. Configure Claude Code
+
+**Option A — CLI (recommended):**
+```bash
+claude mcp add browser -s user -e BROWSER_HEADLESS=false -- /path/to/.venv/bin/python /path/to/browser_mcp.py
+```
+
+On Windows:
+```powershell
+claude mcp add browser -s user -e BROWSER_HEADLESS=false -- C:\path\to\.venv\Scripts\python.exe C:\path\to\browser_mcp.py
+```
+
+**Option B — Manual config:**
 
 Add to your **project-level** `.mcp.json`:
 
@@ -51,8 +72,8 @@ Add to your **project-level** `.mcp.json`:
 {
     "mcpServers": {
         "browser": {
-            "command": "/path/to/browser-mcp/.venv/bin/python",
-            "args": ["/path/to/browser-mcp/browser_mcp.py"],
+            "command": "/path/to/.venv/bin/python",
+            "args": ["/path/to/browser_mcp.py"],
             "env": {
                 "BROWSER_HEADLESS": "false"
             }
@@ -153,37 +174,46 @@ If a CSS/XPath selector finds nothing, it automatically falls back to text match
 
 ```
 Claude Code (CLI)
-    │
-    ├── MCP Protocol (stdio)
-    │
-    ▼
+    |
+    +-- MCP Protocol (stdio)
+    |
+    v
 Browser MCP Server (Python)
-    │
-    ├── FastMCP (tool registration + validation)
-    ├── Pydantic (input validation)
-    │
-    ▼
+    |
+    +-- FastMCP (tool registration + validation)
+    +-- Pydantic (input validation)
+    |
+    v
 Playwright (async)
-    │
-    ▼
+    |
+    v
 Chromium Browser
 ```
 
 The server maintains a persistent browser instance across tool calls using FastMCP's lifespan management. The browser launches once when the MCP connection starts and closes when it ends.
 
+## Compatibility
+
+- **Python**: 3.10+
+- **MCP SDK**: 1.26.0+
+- **Playwright**: 1.58.0+
+- **Platforms**: Windows, macOS, Linux
+
 ## Troubleshooting
 
 **"Playwright browsers not installed"**
 ```bash
-cd browser-mcp && source .venv/bin/activate
+cd Claude_Browser_MCP_Server && source .venv/bin/activate  # Linux/macOS
+# or: .venv\Scripts\activate  # Windows
 playwright install chromium
 sudo playwright install-deps chromium  # Linux system deps
 ```
 
 **"Connection refused" / Server not starting**
-- Check the path in your MCP config points to the correct `.venv/bin/python`
+- Check the path in your MCP config points to the correct `.venv/bin/python` (Linux/macOS) or `.venv\Scripts\python.exe` (Windows)
 - Ensure the virtual environment was created successfully
 - Try running manually: `.venv/bin/python browser_mcp.py`
+- Check server status: `claude mcp list`
 
 **Headless mode on Linux server**
 ```json
