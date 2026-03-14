@@ -1,6 +1,6 @@
-# Browser MCP Server
+# Browser & File MCP Server
 
-**Give Claude Code a browser.** This MCP server bridges Claude Code (or any MCP client) with a real browser via Playwright, enabling AI agents to navigate websites, interact with pages, fill forms, take screenshots, and more — all from the command line.
+**Give Claude Code a browser and file superpowers.** This MCP server bridges Claude Code (or any MCP client) with a real browser via Playwright **and** adds the ability to read Excel, Word, PowerPoint, CSV, and image files — all from the command line.
 
 ## The Problem
 
@@ -8,7 +8,7 @@ Claude Code lives in the terminal. It can write code, run scripts, and manage fi
 
 ## The Solution
 
-This MCP server gives Claude Code a full browser automation toolkit. Claude Code can now:
+This MCP server gives Claude Code a full browser automation toolkit **and** file reading capabilities. Claude Code can now:
 
 - **Navigate** to any URL and read page content
 - **Click** buttons, links, and interactive elements
@@ -18,6 +18,12 @@ This MCP server gives Claude Code a full browser automation toolkit. Claude Code
 - **Execute JavaScript** in the page context
 - **Manage tabs** — open, close, switch between them
 - **Scroll, hover, wait** — full interactive control
+- **Read Excel** workbooks — sheets, headers, data as markdown tables
+- **Read Word** documents — text, headings, tables
+- **Read PowerPoint** presentations — slide text, tables, speaker notes
+- **Read CSV** files — with configurable delimiters and encoding
+- **Read images** — JPG, PNG, GIF, BMP, WebP, TIFF returned as base64 for Claude's vision
+- **Inspect files** — metadata, size, type, modification date
 
 ## What is MCP?
 
@@ -97,7 +103,9 @@ In Claude Code, just ask it to do browser things:
 
 Claude Code will automatically use the browser tools when appropriate.
 
-## Available Tools
+## Available Tools (25)
+
+### Browser Tools (18)
 
 | Tool | Description |
 |------|-------------|
@@ -119,6 +127,18 @@ Claude Code will automatically use the browser tools when appropriate.
 | `browser_forward` | Navigate forward in history |
 | `browser_tabs` | Create, close, list, switch tabs |
 | `browser_page_info` | Get URL, title, viewport, element counts |
+
+### File Tools (7)
+
+| Tool | Description |
+|------|-------------|
+| `file_info` | File metadata: size, type, modified date, readability |
+| `file_list_sheets` | List all sheet names and dimensions in an Excel workbook |
+| `file_read_excel` | Read Excel sheets as markdown tables (configurable rows, start position) |
+| `file_read_csv` | Read CSV files as markdown tables (configurable delimiter, encoding) |
+| `file_read_word` | Extract text, headings, and tables from .docx files |
+| `file_read_powerpoint` | Extract slide text, tables, and speaker notes from .pptx files |
+| `file_read_image` | Read images as base64 PNG for Claude's vision (auto-resizes large images) |
 
 ## Configuration
 
@@ -156,6 +176,24 @@ Environment variables (set in the `env` block of your MCP config):
 ```
 "Navigate to the job board, find all Python developer positions
  posted this week, and extract the company names and salaries"
+```
+
+### Read a Spreadsheet
+```
+"Read the Excel file at C:\Reports\Q1_sales.xlsx and summarize the data"
+"List all sheets in the workbook and show me the first 50 rows of the Summary tab"
+```
+
+### Analyze an Image
+```
+"Look at the screenshot at C:\Users\gregg\Desktop\error.png and tell me what the error is"
+"Read the architecture diagram at C:\docs\system_diagram.jpg and describe the components"
+```
+
+### Process Documents
+```
+"Read the Word doc at C:\proposals\draft.docx and check for any inconsistencies"
+"Extract all the slide content from the PowerPoint at C:\presentations\quarterly.pptx"
 ```
 
 ## How Selectors Work
@@ -197,6 +235,10 @@ The server maintains a persistent browser instance across tool calls using FastM
 - **Python**: 3.10+
 - **MCP SDK**: 1.26.0+
 - **Playwright**: 1.58.0+
+- **openpyxl**: 3.1.0+ (Excel)
+- **python-docx**: 1.1.0+ (Word)
+- **python-pptx**: 1.0.0+ (PowerPoint)
+- **Pillow**: 10.0.0+ (Images)
 - **Platforms**: Windows, macOS, Linux
 
 ## Troubleshooting
