@@ -957,6 +957,460 @@ async def browser_get_html(ctx: Context) -> str:
         return json.dumps({"status": "error", "message": str(e)})
 
 
+# ─── File Processing Input Models ────────────────────────────────────────
+
+
+class FilePathInput(BaseModel):
+    """Input requiring a file path."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    path: str = Field(..., description="Absolute path to the file")
+
+
+class ExcelReadInput(BaseModel):
+    """Input for reading an Excel file."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    path: str = Field(..., description="Absolute path to the .xlsx or .xls file")
+    sheet: Optional[str] = Field(default=None, description="Sheet name to read. If omitted, reads the active/first sheet.")
+    max_rows: int = Field(default=200, description="Maximum number of data rows to return", ge=1, le=10000)
+    start_row: int = Field(default=1, description="Row number to start reading from (1-based)", ge=1)
+
+
+class CsvReadInput(BaseModel):
+    """Input for reading a CSV file."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    path: str = Field(..., description="Absolute path to the .csv file")
+    max_rows: int = Field(default=200, description="Maximum number of data rows to return", ge=1, le=10000)
+    delimiter: str = Field(default=",", description="Column delimiter character")
+    encoding: str = Field(default="utf-8", description="File encoding (e.g. utf-8, latin-1, cp1252)")
+
+
+class ImageReadInput(BaseModel):
+    """Input for reading an image file."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    path: str = Field(..., description="Absolute path to the image file (JPG, PNG, GIF, BMP, WebP, TIFF)")
+    max_dimension: int = Field(default=1568, description="Resize the longest side to this many pixels if larger (saves tokens)", ge=100, le=4000)
+
+
+# ─── File Processing Tools ───────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="file_info",
+    annotations={
+        "title": "Get File Info",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def file_info(params: FilePathInput, ctx: Context) -> str:
+    """Get file metadata: size, type, modification date, and whether it's readable.
+
+    Args:
+        params (FilePathInput): Contains the file path.
+
+    Returns:
+        str: JSON with file size, extension, modified time, and readability.
+    """
+    from datetime import datetime as dt
+
+    try:
+        p = os.path.abspath(params.path)
+        if not os.path.exists(p):
+            return json.dumps({"status": "error", "message": f"File not found: {p}"})
+
+        st = os.stat(p)
+        ext = os.path.splitext(p)[1].lower()
+
+        supported_types = {
+            ".xlsx": "Excel Workbook", ".xls": "Excel Workbook (legacy)",
+            ".csv": "CSV", ".tsv": "TSV",
+            ".docx": "Word Document", ".doc": "Word Document (legacy)",
+            ".pptx": "PowerPoint Presentation", ".ppt": "PowerPoint (legacy)",
+            ".jpg": "JPEG Image", ".jpeg": "JPEG Image", ".png": "PNG Image",
+            ".gif": "GIF Image", ".bmp": "BMP Image", ".webp": "WebP Image",
+            ".tiff": "TIFF Image", ".tif": "TIFF Image",
+            ".pdf": "PDF Document",
+            ".txt": "Text File", ".md": "Markdown File", ".json": "JSON File",
+        }
+
+        return json.dumps({
+            "status": "success",
+            "path": p,
+            "name": os.path.basename(p),
+            "extension": ext,
+            "file_type": supported_types.get(ext, "Unknown"),
+            "size_bytes": st.st_size,
+            "size_human": f"{st.st_size / 1024:.1f} KB" if st.st_size < 1048576 else f"{st.st_size / 1048576:.1f} MB",
+            "modified": dt.fromtimestamp(st.st_mtime).isoformat(),
+            "readable": os.access(p, os.R_OK),
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+@mcp.tool(
+    name="file_list_sheets",
+    annotations={
+        "title": "List Excel Sheets",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def file_list_sheets(params: FilePathInput, ctx: Context) -> str:
+    """List all sheet names in an Excel workbook.
+
+    Args:
+        params (FilePathInput): Contains the path to the Excel file.
+
+    Returns:
+        str: JSON with list of sheet names and row/column counts per sheet.
+    """
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(params.path, read_only=True, data_only=True)
+        sheets = []
+        for name in wb.sheetnames:
+            ws = wb[name]
+            sheets.append({
+                "name": name,
+                "rows": ws.max_row,
+                "columns": ws.max_column,
+            })
+        wb.close()
+        return json.dumps({"status": "success", "path": params.path, "sheets": sheets})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+@mcp.tool(
+    name="file_read_excel",
+    annotations={
+        "title": "Read Excel File",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def file_read_excel(params: ExcelReadInput, ctx: Context) -> str:
+    """Read an Excel file and return contents as a markdown table.
+
+    Args:
+        params (ExcelReadInput): Contains path, optional sheet name, max_rows, and start_row.
+
+    Returns:
+        str: JSON with sheet name, row/column counts, headers, and data as a markdown table.
+    """
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(params.path, read_only=True, data_only=True)
+
+        if params.sheet:
+            if params.sheet not in wb.sheetnames:
+                wb.close()
+                return json.dumps({"status": "error", "message": f"Sheet '{params.sheet}' not found. Available: {wb.sheetnames}"})
+            ws = wb[params.sheet]
+        else:
+            ws = wb.active
+
+        sheet_title = ws.title
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+
+        if not rows:
+            return json.dumps({"status": "success", "sheet": sheet_title, "message": "Sheet is empty", "table": ""})
+
+        headers = [str(h) if h is not None else "" for h in rows[0]]
+
+        start_idx = params.start_row
+        end_idx = start_idx + params.max_rows
+        data_rows = rows[start_idx:end_idx]
+        total_data_rows = len(rows) - 1
+
+        md_lines = []
+        md_lines.append("| " + " | ".join(headers) + " |")
+        md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+        for row in data_rows:
+            cells = [str(c) if c is not None else "" for c in row]
+            while len(cells) < len(headers):
+                cells.append("")
+            cells = cells[:len(headers)]
+            md_lines.append("| " + " | ".join(cells) + " |")
+
+        table = "\n".join(md_lines)
+
+        return json.dumps({
+            "status": "success",
+            "sheet": sheet_title,
+            "total_rows": total_data_rows,
+            "rows_returned": len(data_rows),
+            "columns": len(headers),
+            "headers": headers,
+            "truncated": total_data_rows > len(data_rows),
+            "table": _truncate(table, 80000),
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+@mcp.tool(
+    name="file_read_csv",
+    annotations={
+        "title": "Read CSV File",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def file_read_csv(params: CsvReadInput, ctx: Context) -> str:
+    """Read a CSV file and return contents as a markdown table.
+
+    Args:
+        params (CsvReadInput): Contains path, max_rows, delimiter, and encoding.
+
+    Returns:
+        str: JSON with headers, row counts, and data as a markdown table.
+    """
+    import csv
+
+    try:
+        with open(params.path, "r", encoding=params.encoding, newline="") as f:
+            reader = csv.reader(f, delimiter=params.delimiter)
+            rows = []
+            for i, row in enumerate(reader):
+                if i > params.max_rows:
+                    break
+                rows.append(row)
+
+        if not rows:
+            return json.dumps({"status": "success", "message": "File is empty", "table": ""})
+
+        headers = rows[0]
+        data_rows = rows[1:]
+
+        md_lines = []
+        md_lines.append("| " + " | ".join(headers) + " |")
+        md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+        for row in data_rows:
+            while len(row) < len(headers):
+                row.append("")
+            row = row[:len(headers)]
+            md_lines.append("| " + " | ".join(row) + " |")
+
+        table = "\n".join(md_lines)
+
+        return json.dumps({
+            "status": "success",
+            "total_rows": len(data_rows),
+            "columns": len(headers),
+            "headers": headers,
+            "truncated": len(data_rows) >= params.max_rows,
+            "table": _truncate(table, 80000),
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+@mcp.tool(
+    name="file_read_word",
+    annotations={
+        "title": "Read Word Document",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def file_read_word(params: FilePathInput, ctx: Context) -> str:
+    """Read a .docx Word document and return its text content, including tables.
+
+    Args:
+        params (FilePathInput): Contains the path to the .docx file.
+
+    Returns:
+        str: JSON with document text, table count, and paragraph count.
+    """
+    try:
+        from docx import Document
+        doc = Document(params.path)
+
+        paragraphs = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                if para.style.name.startswith("Heading"):
+                    level = para.style.name.replace("Heading ", "").replace("Heading", "1")
+                    try:
+                        level = int(level)
+                    except ValueError:
+                        level = 1
+                    paragraphs.append("#" * level + " " + text)
+                else:
+                    paragraphs.append(text)
+
+        tables_md = []
+        for table in doc.tables:
+            rows = []
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                rows.append("| " + " | ".join(cells) + " |")
+            if rows:
+                header_sep = "| " + " | ".join(["---"] * len(table.rows[0].cells)) + " |"
+                rows.insert(1, header_sep)
+                tables_md.append("\n".join(rows))
+
+        content = "\n\n".join(paragraphs)
+        if tables_md:
+            content += "\n\n---\n\n## Tables\n\n" + "\n\n".join(tables_md)
+
+        return json.dumps({
+            "status": "success",
+            "path": params.path,
+            "paragraphs": len(paragraphs),
+            "tables": len(doc.tables),
+            "content": _truncate(content, 80000),
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+@mcp.tool(
+    name="file_read_powerpoint",
+    annotations={
+        "title": "Read PowerPoint Presentation",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def file_read_powerpoint(params: FilePathInput, ctx: Context) -> str:
+    """Read a .pptx PowerPoint file and return text from all slides.
+
+    Args:
+        params (FilePathInput): Contains the path to the .pptx file.
+
+    Returns:
+        str: JSON with slide count and text content organized by slide.
+    """
+    try:
+        from pptx import Presentation
+        prs = Presentation(params.path)
+
+        slides_content = []
+        for i, slide in enumerate(prs.slides, 1):
+            texts = []
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            texts.append(text)
+                if shape.has_table:
+                    table = shape.table
+                    rows = []
+                    for row in table.rows:
+                        cells = [cell.text.strip() for cell in row.cells]
+                        rows.append("| " + " | ".join(cells) + " |")
+                    if rows:
+                        header_sep = "| " + " | ".join(["---"] * len(table.rows[0].cells)) + " |"
+                        rows.insert(1, header_sep)
+                        texts.append("\n".join(rows))
+
+            notes = ""
+            if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                notes = slide.notes_slide.notes_text_frame.text.strip()
+
+            slide_text = "\n".join(texts)
+            slide_entry = f"## Slide {i}\n\n{slide_text}"
+            if notes:
+                slide_entry += f"\n\n**Notes:** {notes}"
+            slides_content.append(slide_entry)
+
+        content = "\n\n---\n\n".join(slides_content)
+
+        return json.dumps({
+            "status": "success",
+            "path": params.path,
+            "total_slides": len(prs.slides),
+            "content": _truncate(content, 80000),
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+@mcp.tool(
+    name="file_read_image",
+    annotations={
+        "title": "Read Image File",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def file_read_image(params: ImageReadInput, ctx: Context) -> str:
+    """Read an image file and return it as base64 for Claude's vision, plus metadata.
+
+    Supports: JPG, PNG, GIF, BMP, WebP, TIFF. Large images are automatically
+    resized to save context tokens.
+
+    Args:
+        params (ImageReadInput): Contains file path and optional max_dimension for resizing.
+
+    Returns:
+        str: JSON with base64-encoded image data, dimensions, format, and file size.
+    """
+    try:
+        from PIL import Image
+        import io
+
+        p = os.path.abspath(params.path)
+        if not os.path.exists(p):
+            return json.dumps({"status": "error", "message": f"File not found: {p}"})
+
+        img = Image.open(p)
+        original_size = img.size
+        img_format = img.format or "PNG"
+
+        if img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGBA")
+            background = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background.convert("RGB")
+        elif img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+
+        max_dim = params.max_dimension
+        w, h = img.size
+        if max(w, h) > max_dim:
+            ratio = max_dim / max(w, h)
+            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        return json.dumps({
+            "status": "success",
+            "path": p,
+            "original_size": {"width": original_size[0], "height": original_size[1]},
+            "returned_size": {"width": img.size[0], "height": img.size[1]},
+            "original_format": img_format,
+            "encoding": "base64",
+            "media_type": "image/png",
+            "size_bytes": len(buf.getvalue()),
+            "data": b64,
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
 # ─── Entry Point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
