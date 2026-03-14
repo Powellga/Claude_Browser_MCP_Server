@@ -271,6 +271,19 @@ sudo playwright install-deps chromium  # Linux system deps
 }
 ```
 
+## Companion Project: Claude Code IDE
+
+This MCP server is designed to work with the **[Claude Code IDE](https://github.com/Powellga/Claude-Code-IDE)** — a full web-based IDE that wraps Claude Code's CLI with project management, session recording, and a multi-tab interface.
+
+When used together:
+
+- **File upload with auto-ingestion** — Click the upload button in the IDE, select a file (Excel, Word, PowerPoint, image, CSV), and it drops into the project's working directory. The IDE automatically prompts Claude to read it using this server's file tools. No copy-pasting, no file paths to type.
+- **Zero configuration** — Claude Code discovers this MCP server automatically via `~/.claude/settings.json`. Start a session in the IDE and all 25 tools are available immediately.
+- **Session persistence** — The IDE records every conversation, cleans the raw terminal output through a virtual terminal emulator, and lets you resume sessions natively. The MCP tools are available across resumed sessions without reconnecting.
+- **Working directory awareness** — Each IDE project has a configured working directory. Files uploaded through the IDE land in that directory, and file tool paths resolve relative to where Claude Code is actually running.
+
+The IDE handles the UI, session management, and PTY process lifecycle. This server handles browser automation and file processing. They communicate through Claude Code's MCP protocol — the IDE never talks to this server directly.
+
 ## License
 
 MIT — do whatever you want with it.
