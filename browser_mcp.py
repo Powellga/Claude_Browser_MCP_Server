@@ -47,32 +47,66 @@ VIEWPORT_HEIGHT = int(os.getenv("BROWSER_VIEWPORT_HEIGHT", "720"))
 DEFAULT_TIMEOUT = int(os.getenv("BROWSER_TIMEOUT", "30000"))
 BROWSER_TYPE = os.getenv("BROWSER_TYPE", "chromium")
 
-# ─── Lifespan: Manage Browser Instance ─────────────────────────────────────
+# ─── Lazy Browser Manager ──────────────────────────────────────────────────
+
+class _LazyBrowser:
+    """Delays Playwright browser launch until the first tool call.
+
+    This prevents the MCP server from timing out during startup, since
+    launching Chromium can take several seconds on Windows.
+    """
+
+    def __init__(self):
+        self.pw = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self._started = False
+
+    async def ensure_started(self):
+        """Launch the browser if it hasn't been launched yet."""
+        if self._started:
+            return
+        from playwright.async_api import async_playwright
+
+        self.pw = await async_playwright().start()
+        launcher = getattr(self.pw, BROWSER_TYPE, self.pw.chromium)
+        self.browser = await launcher.launch(headless=HEADLESS)
+        self.context = await self.browser.new_context(
+            viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+        )
+        self.context.set_default_timeout(DEFAULT_TIMEOUT)
+        self.page = await self.context.new_page()
+        self._started = True
+
+    async def shutdown(self):
+        """Clean up browser resources."""
+        if not self._started:
+            return
+        try:
+            await self.context.close()
+        except Exception:
+            pass
+        try:
+            await self.browser.close()
+        except Exception:
+            pass
+        try:
+            await self.pw.stop()
+        except Exception:
+            pass
+
 
 @asynccontextmanager
 async def browser_lifespan(server):
-    """Launch and manage a persistent Playwright browser instance."""
-    from playwright.async_api import async_playwright
-
-    pw = await async_playwright().start()
-
-    launcher = getattr(pw, BROWSER_TYPE, pw.chromium)
-    browser = await launcher.launch(headless=HEADLESS)
-    context = await browser.new_context(
-        viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-    )
-    context.set_default_timeout(DEFAULT_TIMEOUT)
-    page = await context.new_page()
-
-    yield {"pw": pw, "browser": browser, "context": context, "page": page}
-
-    await context.close()
-    await browser.close()
-    await pw.stop()
+    """MCP lifespan — returns immediately; browser launches on first use."""
+    lazy = _LazyBrowser()
+    yield {"_lazy": lazy}
+    await lazy.shutdown()
 
 
 # ─── Initialize Server ─────────────────────────────────────────────────────
@@ -82,14 +116,18 @@ mcp = FastMCP("browser_mcp", lifespan=browser_lifespan)
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
-def _get_page(ctx: Context):
-    """Get the active Playwright page from lifespan state."""
-    return ctx.request_context.lifespan_context["page"]
+async def _get_page(ctx: Context):
+    """Get the active Playwright page, launching browser if needed."""
+    lazy = ctx.request_context.lifespan_context["_lazy"]
+    await lazy.ensure_started()
+    return lazy.page
 
 
-def _get_context(ctx: Context):
-    """Get the browser context from lifespan state."""
-    return ctx.request_context.lifespan_context["context"]
+async def _get_context(ctx: Context):
+    """Get the browser context, launching browser if needed."""
+    lazy = ctx.request_context.lifespan_context["_lazy"]
+    await lazy.ensure_started()
+    return lazy.context
 
 
 async def _resolve_locator(page, selector: str, index: int = 0):
@@ -282,7 +320,7 @@ async def browser_navigate(params: NavigateInput, ctx: Context) -> str:
     Returns:
         str: JSON with page title and final URL
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         response = await page.goto(params.url, wait_until=params.wait_until)
         status = response.status if response else "unknown"
@@ -319,7 +357,7 @@ async def browser_click(params: ClickInput, ctx: Context) -> str:
     Returns:
         str: JSON confirming click action or error details
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         locator = await _resolve_locator(page, params.selector, params.index)
         await locator.click(button=params.button, click_count=params.click_count)
@@ -357,7 +395,7 @@ async def browser_type(params: TypeInput, ctx: Context) -> str:
     Returns:
         str: JSON confirming type action or error details
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         locator = await _resolve_locator(page, params.selector, params.index)
         if params.clear_first:
@@ -391,7 +429,7 @@ async def browser_fill(params: FillInput, ctx: Context) -> str:
     Returns:
         str: JSON confirming fill or error details
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         locator = await _resolve_locator(page, params.selector, params.index)
         await locator.fill(params.value)
@@ -422,7 +460,7 @@ async def browser_select(params: SelectInput, ctx: Context) -> str:
     Returns:
         str: JSON with selected values or error details
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         locator = await _resolve_locator(page, params.selector, params.index)
         if params.value:
@@ -456,7 +494,7 @@ async def browser_hover(params: HoverInput, ctx: Context) -> str:
     Returns:
         str: JSON confirming hover or error details
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         locator = await _resolve_locator(page, params.selector, params.index)
         await locator.hover()
@@ -487,7 +525,7 @@ async def browser_scroll(params: ScrollInput, ctx: Context) -> str:
     Returns:
         str: JSON confirming scroll action
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     dx, dy = 0, 0
     if params.direction == "down":
         dy = params.amount
@@ -532,7 +570,7 @@ async def browser_wait(params: WaitInput, ctx: Context) -> str:
     Returns:
         str: JSON confirming wait completed or timeout error
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         if params.selector:
             await page.wait_for_selector(
@@ -569,7 +607,7 @@ async def browser_screenshot(params: ScreenshotInput, ctx: Context) -> str:
     Returns:
         str: JSON with base64 screenshot data and metadata
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         if params.selector:
             locator = await _resolve_locator(page, params.selector)
@@ -614,7 +652,7 @@ async def browser_find(params: FindInput, ctx: Context) -> str:
     Returns:
         str: JSON array of matching elements with tag, text, attributes, and bounding box
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         if params.selector:
             locator = page.locator(params.selector)
@@ -688,7 +726,7 @@ async def browser_get_text(params: GetTextInput, ctx: Context) -> str:
     Returns:
         str: JSON with extracted text content, page URL, and title
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         if params.selector:
             locator = await _resolve_locator(page, params.selector, params.index)
@@ -726,7 +764,7 @@ async def browser_evaluate(params: EvaluateInput, ctx: Context) -> str:
     Returns:
         str: JSON with the JavaScript return value
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         result = await page.evaluate(params.script)
         return json.dumps({"status": "success", "result": result}, default=str)
@@ -755,7 +793,7 @@ async def browser_keyboard(params: KeyboardInput, ctx: Context) -> str:
     Returns:
         str: JSON confirming key press
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         for _ in range(params.count):
             await page.keyboard.press(params.key)
@@ -780,7 +818,7 @@ async def browser_back(ctx: Context) -> str:
     Returns:
         str: JSON with new page URL and title
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         await page.go_back(wait_until="domcontentloaded")
         return json.dumps({"status": "success", "url": page.url, "title": await page.title()})
@@ -804,7 +842,7 @@ async def browser_forward(ctx: Context) -> str:
     Returns:
         str: JSON with new page URL and title
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         await page.go_forward(wait_until="domcontentloaded")
         return json.dumps({"status": "success", "url": page.url, "title": await page.title()})
@@ -834,8 +872,8 @@ async def browser_tabs(params: TabInput, ctx: Context) -> str:
     Returns:
         str: JSON with tab operation results
     """
-    browser_ctx = _get_context(ctx)
-    state = ctx.request_context.lifespan_context
+    browser_ctx = await _get_context(ctx)
+    lazy = ctx.request_context.lifespan_context["_lazy"]
 
     try:
         pages = browser_ctx.pages
@@ -847,7 +885,7 @@ async def browser_tabs(params: TabInput, ctx: Context) -> str:
                     "index": i,
                     "url": p.url,
                     "title": await p.title(),
-                    "is_active": p == state["page"],
+                    "is_active": p == lazy.page,
                 })
             return json.dumps({"status": "success", "tabs": tabs})
 
@@ -855,7 +893,7 @@ async def browser_tabs(params: TabInput, ctx: Context) -> str:
             new_page = await browser_ctx.new_page()
             if params.url:
                 await new_page.goto(params.url, wait_until="domcontentloaded")
-            state["page"] = new_page
+            lazy.page = new_page
             return json.dumps({
                 "status": "success",
                 "action": "new_tab",
@@ -869,7 +907,7 @@ async def browser_tabs(params: TabInput, ctx: Context) -> str:
                     "status": "error",
                     "message": f"Invalid tab index. Available: 0-{len(pages)-1}",
                 })
-            state["page"] = pages[params.tab_index]
+            lazy.page = pages[params.tab_index]
             await pages[params.tab_index].bring_to_front()
             return json.dumps({
                 "status": "success",
@@ -885,10 +923,10 @@ async def browser_tabs(params: TabInput, ctx: Context) -> str:
             if idx >= len(pages):
                 return json.dumps({"status": "error", "message": f"Invalid tab index: {idx}"})
             closing = pages[idx]
-            was_active = closing == state["page"]
+            was_active = closing == lazy.page
             await closing.close()
             if was_active:
-                state["page"] = browser_ctx.pages[min(idx, len(browser_ctx.pages) - 1)]
+                lazy.page = browser_ctx.pages[min(idx, len(browser_ctx.pages) - 1)]
             return json.dumps({"status": "success", "action": "closed", "closed_index": idx})
 
     except Exception as e:
@@ -911,7 +949,7 @@ async def browser_page_info(ctx: Context) -> str:
     Returns:
         str: JSON with page URL, title, viewport dimensions, and element counts
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         info = await page.evaluate("""() => ({
             url: window.location.href,
@@ -949,7 +987,7 @@ async def browser_get_html(ctx: Context) -> str:
     Returns:
         str: The page HTML content
     """
-    page = _get_page(ctx)
+    page = await _get_page(ctx)
     try:
         html = await page.content()
         return _truncate(html, 80000)
