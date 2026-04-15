@@ -1,6 +1,6 @@
 # Browser & File MCP Server
 
-**Give Claude Code a browser and file superpowers.** This MCP server bridges Claude Code (or any MCP client) with a real browser via Playwright **and** adds the ability to read Excel, Word, PowerPoint, CSV, and image files — all from the command line.
+**Give Claude Code browser and file superpowers.** This MCP server bridges Claude Code (or any MCP client) with a real browser via Playwright **and** adds the ability to read Excel, Word, PowerPoint, CSV, and image files — all from the command line.
 
 ## The Problem
 
